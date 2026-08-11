@@ -227,8 +227,6 @@ int main(int argc, char *argv[]) {
             break;
        } 
        case 3: { // Configure/Run Pulse Train
-            // Re-open resets armed instruments; re-arm PPS/OR before pulse train.
-            pps_ctrl::StartPps();
             pps_ctrl::RunPulseTrain();
             std::cout << "Sent Pulse Train.." << std::endl;
             break;
