@@ -8,6 +8,10 @@
 #include <fstream>
 #include <vector>
 #include <unistd.h> // for sleep function
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 using namespace wf;
 
@@ -17,6 +21,25 @@ namespace pps_ctrl {
 
     bool or_func(int iAddress);
     void configure_rom(int chan, bool (*func)(int));
+
+    // Wall-clock (system time, UTC) with nanoseconds, e.g. "21:17:15.713245678Z",
+    // same layout as the quill timestamps in the tpc_daq / tof_daq logs so the
+    // ad3_ctrl lines in journald can be placed against them and the PPS records.
+    std::string Now() {
+        using namespace std::chrono;
+        const auto now = system_clock::now();
+        const auto ns = duration_cast<nanoseconds>(now.time_since_epoch()) % 1000000000;
+        const std::time_t t = system_clock::to_time_t(now);
+        std::tm tm{};
+        gmtime_r(&t, &tm);
+        std::ostringstream os;
+        os << std::put_time(&tm, "%H:%M:%S") << '.' << std::setw(9) << std::setfill('0') << ns.count() << "Z";
+        return os.str();
+    }
+
+    void Print(const std::string &msg) {
+        std::cout << Now() << " ad3_ctrl[" << getpid() << "] " << msg << std::endl;
+    }
 
     // Custom waveform, each element is a tick of the 10MHz clock
     // so represents 100ns.
@@ -208,33 +231,36 @@ int main(int argc, char *argv[]) {
     // To keep the AD3 running even after the program ends we need to set the
     // DwfParamOnClose parameter to 0
     FDwfParamSet(DwfParamOnClose, 0); // 0 = run, 1 = stop, 2 = shutdown
+    pps_ctrl::Print("Start, operation " + std::to_string(operation));
     // The AD3 device, open it
     pps_ctrl::device_data = device.open("Analog Discovery 3");
     if (pps_ctrl::device_data == nullptr) {
+        pps_ctrl::Print("Failed to open device..");
         std::cerr << "Failed to open device.." << std::endl;
         return 3;
     }
+    pps_ctrl::Print("Device opened");
 
     switch (operation) {
         case 1: { // Power on AD3
             pps_ctrl::InitDevice();
-            std::cout << "Powered on AD3.." << std::endl;
+            pps_ctrl::Print("Powered on AD3..");
             break;
         }
         case 2: { // Configure/Start PPS
             pps_ctrl::StartPps();
-            std::cout << "Started PPS.." << std::endl;
+            pps_ctrl::Print("Started PPS..");
             break;
        } 
        case 3: { // Configure/Run Pulse Train
             pps_ctrl::RunPulseTrain();
-            std::cout << "Sent Pulse Train.." << std::endl;
+            pps_ctrl::Print("Armed pulse train (100 pulses, 1 kHz, 10 ms after the next GPS PPS)..");
             break;
        } 
        case 4: { // Stop PPS
             pps_ctrl::StopPps();                      
             pps_ctrl::StopPulseTrain();                      
-            std::cout << "Stopped PPS.." << std::endl;
+            pps_ctrl::Print("Stopped PPS..");
             break;
        }
        default: {
@@ -252,5 +278,6 @@ int main(int argc, char *argv[]) {
 
    // Close the device to finish
    device.close(pps_ctrl::device_data);
+   pps_ctrl::Print("Device closed, done");
 
  }
