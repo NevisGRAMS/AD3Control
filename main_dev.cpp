@@ -173,8 +173,32 @@ namespace pps_ctrl {
 
     }
 
+    // A pulse train armed by a previous ad3_ctrl call may still be waiting for its
+    // GPS PPS or still be running (the device keeps its state because DwfParamOnClose=0).
+    // Re-arming channel 1 in that window would cancel or truncate that train, so wait
+    // until channel 1 is idle. Worst case: ~10 ms wait + 100/200 ms train, so a 1.5 s
+    // timeout covers one full PPS period.
+    void WaitForPulseTrainIdle() {
+        DwfState state = DwfStateReady;
+        for (int i = 0; i < 300; ++i) { // 300 x 5 ms = 1.5 s
+            if (FDwfAnalogOutStatus(device_data->handle, 1, &state) == 0) {
+                GetError();
+                return;
+            }
+            const bool busy = (state == DwfStateArmed || state == DwfStateWait || state == DwfStateRunning);
+            if (!busy) {
+                if (i > 0) Print("Previous pulse train finished, arming a new one for the next PPS");
+                return;
+            }
+            if (i == 0) Print("Another pulse train is armed/running (state " + std::to_string(state) + "), waiting for it to finish");
+            usleep(5000);
+        }
+        Print("Timed out waiting for the previous pulse train, re-arming anyway");
+    }
+
     void RunPulseTrain() {
         int is_error = -1;
+        WaitForPulseTrainIdle();
         is_error = FDwfAnalogOutNodeEnableSet(device_data->handle, 1, AnalogOutNodeCarrier, true);
         if (is_error == 0) GetError();
         is_error = FDwfAnalogOutNodeFunctionSet(device_data->handle, 1, AnalogOutNodeCarrier, funcCustom);
@@ -233,8 +257,24 @@ int main(int argc, char *argv[]) {
     // DwfParamOnClose parameter to 0
     FDwfParamSet(DwfParamOnClose, 0); // 0 = run, 1 = stop, 2 = shutdown
     pps_ctrl::Print("Start, operation " + std::to_string(operation));
-    // The AD3 device, open it
-    pps_ctrl::device_data = device.open("Analog Discovery 3");
+    // The AD3 device, open it. Only one process can hold the AD3 at a time; another
+    // ad3_ctrl (e.g. tpc_daq and tof_daq starting together) holds it for ~1-2 s,
+    // so retry for a few seconds before giving up.
+    // device.open returns nullptr when no AD3 is connected and throws wf::Error when the
+    // AD3 is present but held by another process.
+    for (int attempt = 1; attempt <= 10; ++attempt) {
+        std::string why;
+        try {
+            pps_ctrl::device_data = device.open("Analog Discovery 3");
+            if (pps_ctrl::device_data != nullptr) break;
+            why = "no device";
+        } catch (const wf::Error &e) {
+            pps_ctrl::device_data = nullptr;
+            why = e.message.substr(0, e.message.find('\n')); // SDK text is multi-line; keep the first line
+        }
+        pps_ctrl::Print("Open attempt " + std::to_string(attempt) + "/10 failed: " + why);
+        usleep(500000);
+    }
     if (pps_ctrl::device_data == nullptr) {
         pps_ctrl::Print("Failed to open device..");
         std::cerr << "Failed to open device.." << std::endl;
