@@ -221,6 +221,7 @@ int main(int argc, char *argv[]) {
         std::cerr << "2 = Start PPS" << std::endl;
         std::cerr << "3 = Run Pulse Train" << std::endl;
         std::cerr << "4 = Stop PPS" << std::endl;
+        std::cerr << "5 = Print channel states (read-only)" << std::endl;
         return 1;
     }
     int operation = std::stoi(argv[1]);
@@ -263,12 +264,21 @@ int main(int argc, char *argv[]) {
             pps_ctrl::Print("Stopped PPS..");
             break;
        }
+       case 5: { // Read-only: report analog-out channel states (0=Ready 1=Armed 2=Done 3=Running 7=Wait)
+            DwfState st0 = DwfStateReady, st1 = DwfStateReady;
+            if (FDwfAnalogOutStatus(pps_ctrl::device_data->handle, 0, &st0) == 0) pps_ctrl::GetError();
+            if (FDwfAnalogOutStatus(pps_ctrl::device_data->handle, 1, &st1) == 0) pps_ctrl::GetError();
+            pps_ctrl::Print("Status: ch0 (PPS) state " + std::to_string(st0) +
+                            ", ch1 (pulse train) state " + std::to_string(st1));
+            break;
+       }
        default: {
             std::cerr << "Wrong argument! Need one of the following:" << std::endl;
             std::cerr << "1 = Init AD3" << std::endl;
             std::cerr << "2 = Start PPS" << std::endl;
             std::cerr << "3 = Run Pulse Train" << std::endl;
             std::cerr << "4 = Stop PPS" << std::endl;
+            std::cerr << "5 = Print channel states (read-only)" << std::endl;
             break;
        }
 
