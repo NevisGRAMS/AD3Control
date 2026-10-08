@@ -8,6 +8,8 @@
 #include <fstream>
 #include <vector>
 #include <unistd.h> // for sleep function
+#include <fcntl.h>
+#include <sys/file.h>
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -257,6 +259,29 @@ int main(int argc, char *argv[]) {
     // DwfParamOnClose parameter to 0
     FDwfParamSet(DwfParamOnClose, 0); // 0 = run, 1 = stop, 2 = shutdown
     pps_ctrl::Print("Start, operation " + std::to_string(operation));
+    // Take the lock before open. FDwfDeviceConfigOpen programs the FPGA, and two
+    // overlapping opens (tpc_daq and tof_daq both running ad3_ctrl) leave that
+    // programming half-done. The retry below only helps after an open has already
+    // failed. 10 s covers one caller holding the device (open + configure + sleep).
+    int lock_fd = open("/tmp/ad3_ctrl.lock", O_CREAT | O_RDWR, 0666);
+    if (lock_fd < 0) {
+        pps_ctrl::Print("Failed to open /tmp/ad3_ctrl.lock");
+        return 3;
+    }
+    bool got_lock = false;
+    for (int i = 0; i < 100; ++i) { // 100 x 100 ms = 10 s
+        if (flock(lock_fd, LOCK_EX | LOCK_NB) == 0) {
+            got_lock = true;
+            break;
+        }
+        if (i == 0) pps_ctrl::Print("Another ad3_ctrl is using the AD3, waiting");
+        usleep(100000);
+    }
+    if (!got_lock) {
+        pps_ctrl::Print("Timed out waiting for the AD3 lock");
+        close(lock_fd);
+        return 3;
+    }
     // The AD3 device, open it. Only one process can hold the AD3 at a time; another
     // ad3_ctrl (e.g. tpc_daq and tof_daq starting together) holds it for ~1-2 s,
     // so retry for a few seconds before giving up.
@@ -278,6 +303,8 @@ int main(int argc, char *argv[]) {
     if (pps_ctrl::device_data == nullptr) {
         pps_ctrl::Print("Failed to open device..");
         std::cerr << "Failed to open device.." << std::endl;
+        flock(lock_fd, LOCK_UN);
+        close(lock_fd);
         return 3;
     }
     pps_ctrl::Print("Device opened");
@@ -326,8 +353,10 @@ int main(int argc, char *argv[]) {
 
    sleep(1);
 
-   // Close the device to finish
+   // Close the device to finish, then release the lock so the next caller can open.
    device.close(pps_ctrl::device_data);
    pps_ctrl::Print("Device closed, done");
+   flock(lock_fd, LOCK_UN);
+   close(lock_fd);
 
  }
